@@ -8,7 +8,6 @@ import openai
 
 from jinja2 import Template
 from pathlib import Path
-from PyPDF2 import PdfReader
 
 chat_model = "gpt-4o"
 embedding_model = "text-embedding-3-small"
@@ -34,18 +33,24 @@ def write_db(db, name):
     print(f"Writing {db.nrow} rows to {path.name}...")
     db.write_npz(path)
 
+def load_chunks(path):
+    if path.suffix == ".pdf":
+        from PyPDF2 import PdfReader
+        for page in PdfReader(path).pages:
+            yield page.extract_text().strip()
+    else:
+        raise NotImplementedError
+
 def populate_db(path):
     print(f"Adding {path.name!r}...")
     blob = path.read_bytes()
     id = hashlib.sha1(blob).hexdigest()[:8]
     chunks = read_or_create_db("chunks")
-    reader = PdfReader(path)
-    for i, page in enumerate(reader.pages):
-        print(f"... Page {i+1:3d}/{len(reader.pages)}: ", end="")
+    for i, text in enumerate(load_chunks(path)):
+        print(f"... Page {i+1:3d}: ", end="")
         if chunks and chunks.filter(document_id=id, chunk=i+1).nrow:
             print("Already in database")
             continue
-        text = page.extract_text().strip()
         response = oai.embeddings.create(input=text, model=embedding_model)
         print(f"{response.usage.total_tokens:4d} tokens")
         embedding = np.array(response.data[0].embedding)
