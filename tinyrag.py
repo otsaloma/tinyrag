@@ -17,11 +17,15 @@ oai = openai.OpenAI()
 def get_db_path(name):
     return Path(__file__).with_name(f"{name}.npz")
 
+def read_db(name):
+    path = get_db_path(name)
+    print(f"Reading {path.name}...")
+    return di.read_npz(path)
+
 def read_or_create_db(name):
     path = get_db_path(name)
     if path.exists():
-        print(f"Reading {path.name}...")
-        return di.read_npz(path)
+        return read_db(name)
     print("Creating new database...")
     return di.DataFrame()
 
@@ -65,7 +69,7 @@ def title_print(title, text):
     print(f"\n{'='*25} {title.upper()} {'='*25}\n\n{text}")
 
 def query_db(query, ntop=5):
-    chunks = read_or_create_db("chunks")
+    chunks = read_db("chunks")
     response = oai.embeddings.create(input=query, model=embedding_model)
     query_embedding = np.array(response.data[0].embedding)
     chunks.similarity = chunks.embedding.map(lambda x: cosine_similarity(x, query_embedding))
