@@ -9,7 +9,7 @@ Define that API key as environment variable `OPENAI_API_KEY`. Then
 
 ```bash
 # Install dependencies.
-pip install -U click dataiter jinja2 openai
+pip install -U click dataiter jinja2 numpy openai pypdf2
 
 # Add PDF documents to the RAG database.
 ./tinyrag.py -p *.pdf
