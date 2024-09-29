@@ -22,8 +22,7 @@ def read_db(name):
     return di.read_npz(path)
 
 def read_or_create_db(name):
-    path = get_db_path(name)
-    if path.exists():
+    if get_db_path(name).exists():
         return read_db(name)
     print("Creating new database...")
     return di.DataFrame()
@@ -36,25 +35,24 @@ def write_db(db, name):
 def load_chunks(path):
     if path.suffix == ".pdf":
         from PyPDF2 import PdfReader
-        for page in PdfReader(path).pages:
+        reader = PdfReader(path)
+        for i, page in enumerate(reader.pages):
+            print(f"... Page {i+1:3d}/{len(reader.pages)}: ", end="")
             yield page.extract_text().strip()
-    else:
-        raise NotImplementedError
 
 def populate_db(path):
-    print(f"Adding {path.name!r}...")
     blob = path.read_bytes()
     id = hashlib.sha1(blob).hexdigest()[:8]
-    chunks = read_or_create_db("chunks")
+    db = read_or_create_db("chunks")
+    nprior = db.nrow
+    print(f"Adding {path.name!r}...")
     for i, text in enumerate(load_chunks(path)):
-        print(f"... Page {i+1:3d}: ", end="")
-        if chunks and chunks.filter(document_id=id, chunk=i+1).nrow:
+        if db and db.filter(document_id=id, chunk=i+1).nrow:
             print("Already in database")
             continue
         response = oai.embeddings.create(input=text, model=embedding_model)
         print(f"{response.usage.total_tokens:4d} tokens")
         embedding = np.array(response.data[0].embedding)
-        assert len(embedding) == 1536
         new = di.DataFrame(document_id=id,
                            document_name=path.name,
                            chunk=i+1,
@@ -63,8 +61,10 @@ def populate_db(path):
 
         new.text = new.text.as_object()
         new.embedding[0] = embedding
-        chunks = chunks.rbind(new)
-    write_db(chunks, "chunks")
+        db = db.rbind(new)
+    nadded = db.nrow - nprior
+    print(f"{nadded} rows added to database.")
+    if nadded: write_db(db, "chunks")
 
 def cosine_similarity(a, b):
     # https://stackoverflow.com/a/43043160
@@ -74,11 +74,12 @@ def title_print(title, text):
     print(f"\n{'='*25} {title.upper()} {'='*25}\n\n{text}")
 
 def query_db(query, ntop=5):
-    chunks = read_db("chunks")
+    db = read_db("chunks")
+    assert di.count_unique(db.embedding.map(len)) == 1, "db broke?"
     response = oai.embeddings.create(input=query, model=embedding_model)
     query_embedding = np.array(response.data[0].embedding)
-    chunks.similarity = chunks.embedding.map(lambda x: cosine_similarity(x, query_embedding))
-    chunks = chunks.sort(similarity=-1).head(ntop)
+    db.similarity = db.embedding.map(lambda x: cosine_similarity(x, query_embedding))
+    db = db.sort(similarity=-1).head(ntop)
     prompt = Template("""
 Use the following sources to answer the subsequent question.
 Do not use any other information.
@@ -92,7 +93,7 @@ If an answer cannot be found in the sources provided, reply "idk" and nothing el
 {% endfor %}
 Question: {{query}}
 """.strip())
-    chunk_dicts = chunks.unselect("embedding").to_list_of_dicts()
+    chunk_dicts = db.unselect("embedding").to_list_of_dicts()
     prompt = prompt.render(chunks=chunk_dicts, query=query)
     title_print("prompt", prompt)
     response = oai.chat.completions.create(model=chat_model, messages=[
